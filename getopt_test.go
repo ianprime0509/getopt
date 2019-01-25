@@ -9,16 +9,21 @@ package getopt
 
 import "testing"
 
+// A testOpt is a container for an option name and argument returned by a Parser.
+type testOpt struct {
+	option string
+	arg    string
+}
+
+// A testCase is a single test case for verifying the behavior of a Parser.
+type testCase struct {
+	input          []string  // the input arguments
+	opts           []testOpt // the desired options after parsing
+	additionalArgs []string  // the arguments left over after parsing
+}
+
 func TestGetopt(t *testing.T) {
-	type testOpt struct {
-		option string
-		arg    string
-	}
-	tests := []struct {
-		input          []string
-		opts           []testOpt
-		additionalArgs []string
-	}{
+	tests := []testCase{
 		{[]string{"-a"}, []testOpt{{"a", ""}}, []string{}},
 		{[]string{"-aaa"}, []testOpt{{"a", ""}, {"a", ""}, {"a", ""}}, []string{}},
 		{[]string{"-b", "25"}, []testOpt{{"bytes", "25"}}, []string{}},
@@ -34,6 +39,7 @@ func TestGetopt(t *testing.T) {
 		{[]string{"-gg", "--go"}, []testOpt{{"go", ""}, {"go", ""}, {"go", ""}}, []string{}},
 		{[]string{"-a", "arg"}, []testOpt{{"a", ""}}, []string{"arg"}},
 		{[]string{"-bbytes", "2"}, []testOpt{{"bytes", "bytes"}}, []string{"2"}},
+		{[]string{"-a", "arg", "-a"}, []testOpt{{"a", ""}}, []string{"arg", "-a"}},
 		{[]string{"-a", "--", "-a"}, []testOpt{{"a", ""}}, []string{"-a"}},
 		{[]string{"--long", "--", "--", "--long"}, []testOpt{{"long", "--"}}, []string{"--long"}},
 	}
@@ -46,43 +52,73 @@ func TestGetopt(t *testing.T) {
 		p.Option(0, "long")
 		p.Flag(0, "flag")
 		p.Flag('g', "go")
-		p.ConsumeSlice(test.input)
 
-		opt, arg, err := p.Getopt()
-		i := 0
-		for err == nil {
-			newOpt := testOpt{opt, arg}
-			if i >= len(test.opts) {
-				t.Errorf("parsing %q: got unexpected option at position %v: %q", test.input, i, newOpt)
-				goto nextTest
-			}
-			if newOpt != test.opts[i] {
-				t.Errorf("parsing %q: at position %v: got %q, want %q", test.input, i, newOpt, test.opts[i])
-				goto nextTest
-			}
+		optTest(t, p, test)
+	}
+}
 
-			opt, arg, err = p.Getopt()
-			i++
+func TestGetoptReorderInput(t *testing.T) {
+	tests := []testCase{
+		{[]string{"-a", "-b", "2"}, []testOpt{{"a", ""}, {"bytes", "2"}}, []string{}},
+		{[]string{"-a", "arg", "-a"}, []testOpt{{"a", ""}, {"a", ""}}, []string{"arg"}},
+		{[]string{"--go", "arg", "--bytes", "25", "arg2"}, []testOpt{{"go", ""}, {"bytes", "25"}}, []string{"arg", "arg2"}},
+		{[]string{"--long", "5", "--", "-a", "arg2"}, []testOpt{{"long", "5"}}, []string{"-a", "arg2"}},
+		{[]string{"arg", "-c", "-c", "-a"}, []testOpt{{"c", "-c"}, {"a", ""}}, []string{"arg"}},
+		{[]string{"arg", "--long", "--", "--", "2"}, []testOpt{{"long", "--"}}, []string{"arg", "2"}},
+	}
+
+	for _, test := range tests {
+		p := new(Parser)
+		p.Flag('a', "")
+		p.Option('b', "bytes")
+		p.Option('c', "")
+		p.Option(0, "long")
+		p.Flag(0, "flag")
+		p.Flag('g', "go")
+		p.ReorderInput(true)
+
+		optTest(t, p, test)
+	}
+}
+
+// optTest runs the given test case using the given parser, as a convenience
+// for making multiple test methods.
+func optTest(t *testing.T, p *Parser, test testCase) {
+	p.ConsumeSlice(test.input)
+
+	opt, arg, err := p.Getopt()
+	i := 0
+	for err == nil {
+		newOpt := testOpt{opt, arg}
+		if i >= len(test.opts) {
+			t.Errorf("parsing %q: got unexpected option at position %v: %q", test.input, i, newOpt)
+			return
 		}
-		if i != len(test.opts) {
-			t.Errorf("parsing %q: got %v options, want %v", test.input, i, len(test.opts))
-			goto nextTest
-		}
-		if err != End {
-			t.Errorf("unexpected error with input %q: %q", test.input, err)
-			goto nextTest
+		if newOpt != test.opts[i] {
+			t.Errorf("parsing %q: at position %v: got %q, want %q", test.input, i, newOpt, test.opts[i])
+			return
 		}
 
-		if len(p.Args()) != len(test.additionalArgs) {
-			t.Errorf("parsing %q: got %v positional arguments, want %v", test.input, len(p.Args()), len(test.additionalArgs))
-			goto nextTest
+		opt, arg, err = p.Getopt()
+		i++
+	}
+	if i != len(test.opts) {
+		t.Errorf("parsing %q: got %v options, want %v", test.input, i, len(test.opts))
+		return
+	}
+	if err != End {
+		t.Errorf("unexpected error with input %q: %q", test.input, err)
+		return
+	}
+
+	if len(p.Args()) != len(test.additionalArgs) {
+		t.Errorf("parsing %q: got %v positional arguments, want %v", test.input, len(p.Args()), len(test.additionalArgs))
+		return
+	}
+	for i, arg := range p.Args() {
+		if arg != test.additionalArgs[i] {
+			t.Errorf("parsing %q: got positional argument %q at index %v, want %q", test.input, arg, i, test.additionalArgs[i])
+			return
 		}
-		for i, arg := range p.Args() {
-			if arg != test.additionalArgs[i] {
-				t.Errorf("parsing %q: got positional argument %q at index %v, want %q", test.input, arg, i, test.additionalArgs[i])
-				goto nextTest
-			}
-		}
-	nextTest:
 	}
 }
